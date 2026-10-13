@@ -1,6 +1,7 @@
 //! Stretching a marker's range on the Timeline ruler (#1348): a drag on the end of a range band
 //! changes its duration, Option-drag on a pentagon gives a point marker a range, a plain drag on a
-//! pentagon or band moves the marker, and one undo puts it back.
+//! pentagon or band moves the marker, and one undo puts it back. While dragging, the playhead
+//! follows and a tooltip shows the exact timecode; Escape puts both back.
 
 use std::sync::mpsc::{Sender, channel};
 
@@ -55,6 +56,13 @@ impl Driver {
         let e = v.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap_or_else(|| panic!("no element {id}")).clone();
         let r: Vec<f64> = e["rect"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
         [r[0], r[1], r[2], r[3]]
+    }
+    fn send(&mut self, e: egui::Event) {
+        self.harness.input_mut().events.push(e);
+        self.frames(1);
+    }
+    fn button(&mut self, pos: egui::Pos2, pressed: bool) {
+        self.send(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
 }
 
@@ -141,4 +149,37 @@ fn a_plain_drag_on_a_pentagon_or_band_moves_the_marker() {
     let m = marker(&d, id);
     assert_eq!(m.start, filmcraft_time::Tick::ZERO);
     assert_eq!(m.duration, before.duration);
+}
+
+#[test]
+fn while_moving_the_playhead_follows_a_timecode_shows_and_escape_puts_both_back() {
+    let mut d = Driver::demo();
+    d.exec("markers.clearAll", json!({}));
+    let id = d.exec("markers.add", json!({"frame": 30, "durationFrames": 24, "name": "Aim"}))["marker"].as_u64().unwrap();
+    d.frames(2);
+    let before = marker(&d, id);
+    let r = d.rect(&format!("timeline.marker.{id}"));
+    let from = egui::pos2((r[0] + r[2] / 2.0) as f32, (r[1] + r[3] / 2.0) as f32);
+    d.send(egui::Event::PointerMoved(from));
+    d.button(from, true);
+    for k in 1..=8 {
+        d.send(egui::Event::PointerMoved(from + egui::vec2(15.0 * k as f32, 0.0)));
+    }
+    d.frames(2);
+    let ph = d.harness.state().session.playhead();
+    assert!(ph > before.start, "the playhead follows the dragged start");
+    assert_eq!(marker(&d, id).start, before.start, "nothing is committed before release");
+    let tip = d.ok("ui.elements", json!({"prefix": "timeline.markerDrag.time"}));
+    let label = tip[0]["label"].as_str().unwrap_or_default().to_owned();
+    let q = d.harness.state().session.active_sequence().unwrap().clone();
+    let tc =
+        filmcraft_time::format_time(ph, q.settings.frame_rate, q.settings.drop_frame, filmcraft_time::TimeDisplay::Timecode, q.settings.sample_rate as i64);
+    assert!(label.contains(&tc), "tooltip {label:?} shows {tc}");
+    assert!(label.contains("Duration"), "a range shows its duration: {label:?}");
+    d.send(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    d.button(from + egui::vec2(120.0, 0.0), false);
+    d.frames(3);
+    assert_eq!(marker(&d, id).start, before.start, "Escape commits nothing");
+    assert_eq!(d.harness.state().session.playhead(), before.start, "the playhead is back on the marker");
+    assert!(d.ok("ui.elements", json!({"prefix": "timeline.markerDrag.time"})).as_array().unwrap().is_empty(), "the tooltip is gone");
 }
