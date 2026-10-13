@@ -242,6 +242,9 @@ pub enum Grab {
     },
     /// The end of a marker's range on the ruler: a drag changes its duration (#1348).
     MarkerEnd(filmcraft_project::MarkerId),
+    /// A marker's pentagon or range band on the ruler: a press puts the playhead on it, a drag
+    /// moves it (#1348).
+    Marker(filmcraft_project::MarkerId),
     /// Not an edge this tool trims: a clip body, a transition, an empty track, the ruler or
     /// nothing. A clip's `edge` may still be set, for tools that do something else there (Razor,
     /// Slip…).
@@ -254,7 +257,7 @@ impl Grab {
         match self {
             Grab::Edge { track, clip, edge, .. } => Hit::Clip { track, clip, edge: Some(edge) },
             Grab::Volume { track, clip } => Hit::Clip { track, clip, edge: None },
-            Grab::MarkerEnd(_) => Hit::Ruler,
+            Grab::MarkerEnd(_) | Grab::Marker(_) => Hit::Ruler,
             Grab::Other(h) => h,
         }
     }
@@ -266,6 +269,9 @@ impl Grab {
 pub fn grab_at(seq: &Sequence, layout: &Layout, pos: Pos2, tool: Tool, mods: Modifiers, roll_ripple: bool) -> Grab {
     if let Some(m) = marker_end_at(seq, layout, pos, mods.alt) {
         return Grab::MarkerEnd(m);
+    }
+    if let Some(m) = marker_under_pointer(seq, layout, pos) {
+        return Grab::Marker(m.id);
     }
     let h = hit(seq, layout, pos);
     if let Hit::Clip { track, clip, edge: None } = h
